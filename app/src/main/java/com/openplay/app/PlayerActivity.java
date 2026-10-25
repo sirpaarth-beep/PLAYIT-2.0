@@ -83,9 +83,7 @@ public class PlayerActivity extends Activity {
     private final Runnable progressTask = new Runnable() {
         @Override
         public void run() {
-            if (released) {
-                return;
-            }
+            if (released) return;
 
             if (player != null && prepared) {
                 updateProgress();
@@ -110,9 +108,7 @@ public class PlayerActivity extends Activity {
             videoUri = getIntent().getData().toString();
         }
 
-        if (videoName == null) {
-            videoName = "OpenPlay";
-        }
+        if (videoName == null) videoName = "OpenPlay";
 
         if (videoUri == null) {
             Toast.makeText(
@@ -145,13 +141,10 @@ public class PlayerActivity extends Activity {
         root.addView(titleText);
 
         videoLayout = new VLCVideoLayout(this);
-        root.addView(
-                videoLayout,
+        root.addView(videoLayout,
                 new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        0, 1
-                )
-        );
+                        -1, 0, 1
+                ));
 
         statusText = new TextView(this);
         statusText.setText("Opening video...");
@@ -240,10 +233,8 @@ public class PlayerActivity extends Activity {
                     @Override
                     public void onProgressChanged(
                             SeekBar bar, int progress,
-                            boolean fromUser) {
-                    }
-                }
-        );
+                            boolean fromUser) { }
+                });
 
         videoLayout.setOnClickListener(v -> toggleControls());
     }
@@ -255,11 +246,7 @@ public class PlayerActivity extends Activity {
         button.setAllCaps(false);
 
         LinearLayout.LayoutParams params =
-                new LinearLayout.LayoutParams(
-                        0,
-                        LinearLayout.LayoutParams.WRAP_CONTENT,
-                        1
-                );
+                new LinearLayout.LayoutParams(0, -2, 1);
         params.setMargins(1, 1, 1, 1);
         button.setLayoutParams(params);
         return button;
@@ -271,29 +258,41 @@ public class PlayerActivity extends Activity {
             prepared = false;
             statusText.setText("Starting VLC...");
 
+            Uri uri = Uri.parse(videoUri);
+
+            Log.i(TAG, "Opening: " + videoName);
+            Log.i(TAG, "URI: " + videoUri);
+            Log.i(TAG, "URI scheme: " + uri.getScheme());
+
+            if ("content".equalsIgnoreCase(uri.getScheme())) {
+                try (android.os.ParcelFileDescriptor pfd =
+                             getContentResolver().openFileDescriptor(uri, "r")) {
+                    if (pfd == null) {
+                        throw new java.io.IOException(
+                                "Content provider returned no file descriptor"
+                        );
+                    }
+                    Log.i(TAG, "Content URI can be opened by the app");
+                }
+            }
+
             ArrayList<String> options = new ArrayList<>();
             options.add("--no-video-title-show");
             options.add("--avcodec-hw=none");
             options.add("--verbose=2");
-
-            Log.i(TAG, "Starting VLC with hardware decoding disabled");
-            Log.i(TAG, "Video URI: " + videoUri);
 
             libVLC = new LibVLC(this, options);
             player = new MediaPlayer(libVLC);
 
             player.setEventListener(event ->
                     runOnUiThread(() -> {
-                        if (released || player == null) {
-                            return;
-                        }
+                        if (released || player == null) return;
 
                         Log.d(TAG, "VLC event: " + event.type);
 
                         switch (event.type) {
                             case MediaPlayer.Event.Opening:
                                 statusText.setText("Opening video...");
-                                Log.i(TAG, "Opening video");
                                 break;
 
                             case MediaPlayer.Event.Buffering:
@@ -316,22 +315,17 @@ public class PlayerActivity extends Activity {
 
                             case MediaPlayer.Event.Stopped:
                                 playButton.setText("PLAY");
-                                Log.i(TAG, "Playback stopped");
                                 break;
 
                             case MediaPlayer.Event.EncounteredError:
                                 prepared = false;
                                 playButton.setText("RETRY");
                                 statusText.setText("VLC playback error");
-
-                                Log.e(
-                                        TAG,
-                                        "Playback failed for URI: " + videoUri
-                                );
+                                Log.e(TAG, "VLC failed to play " + videoUri);
 
                                 Toast.makeText(
                                         PlayerActivity.this,
-                                        "Playback failed. Check file access and VLC logs.",
+                                        "VLC could not open this video. Check runtime logs.",
                                         Toast.LENGTH_LONG
                                 ).show();
                                 break;
@@ -341,34 +335,32 @@ public class PlayerActivity extends Activity {
                                 updateProgress();
                                 break;
                         }
-                    })
-            );
+                    }));
 
             player.attachViews(videoLayout, null, false, false);
 
-            Uri uri = Uri.parse(videoUri);
             Media media = new Media(libVLC, uri);
-
-            mediaPlayerSetMedia(media);
+            player.setMedia(media);
             media.release();
 
             long saved = preferences.getLong(positionKey(), 0L);
+
+            player.play();
+
             if (saved > 0) {
                 handler.postDelayed(() -> {
                     if (player != null && prepared) {
                         player.setTime(saved);
                     }
-                }, 1200);
+                }, 1500);
             }
-
-            player.play();
 
         } catch (Exception e) {
             prepared = false;
+            statusText.setText("Unable to open video");
 
-            Log.e(TAG, "Unable to start playback", e);
+            Log.e(TAG, "Failed to initialize playback", e);
 
-            statusText.setText("Unable to start playback");
             Toast.makeText(
                     this,
                     "Player error: " + e.getClass().getSimpleName()
@@ -378,40 +370,48 @@ public class PlayerActivity extends Activity {
         }
     }
 
-    private void mediaPlayerSetMedia(Media media) {
-        player.setMedia(media);
+    private void togglePlayback() {
+        if (player == null) return;
+
+        if (player.isPlaying()) {
+            player.pause();
+        } else if (prepared) {
+            player.play();
+        } else {
+            new AlertDialog.Builder(this)
+                    .setTitle("Playback failed")
+                    .setMessage("Try opening the video again. If it fails, the runtime VLC error must be checked.")
+                    .setPositiveButton("Retry", (d, w) -> {
+                        releasePlayer();
+                        startPlayback();
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show();
+        }
     }
 
-    private void togglePlayback() {
-        if (player == null) {
-            return;
+    private void releasePlayer() {
+        prepared = false;
+
+        if (player != null) {
+            try {
+                player.stop();
+                player.detachViews();
+                player.release();
+            } catch (Exception e) {
+                Log.w(TAG, "Error releasing player", e);
+            }
+            player = null;
         }
 
-        try {
-            if (player.isPlaying()) {
-                player.pause();
-            } else if (prepared) {
-                player.play();
-            } else {
-                Toast.makeText(
-                        this,
-                        "Video is not ready. Reopen the video.",
-                        Toast.LENGTH_SHORT
-                ).show();
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Playback control failed", e);
-            Toast.makeText(
-                    this, "Playback control failed",
-                    Toast.LENGTH_SHORT
-            ).show();
+        if (libVLC != null) {
+            libVLC.release();
+            libVLC = null;
         }
     }
 
     private void updateProgress() {
-        if (player == null || !prepared) {
-            return;
-        }
+        if (player == null || !prepared) return;
 
         long current = Math.max(0, player.getTime());
         long length = Math.max(0, player.getLength());
@@ -436,17 +436,13 @@ public class PlayerActivity extends Activity {
     }
 
     private void seekBy(long offset) {
-        if (player == null || !prepared) {
-            return;
-        }
+        if (player == null || !prepared) return;
 
         long current = Math.max(0, player.getTime());
         long length = player.getLength();
         long target = Math.max(0, current + offset);
 
-        if (length > 0) {
-            target = Math.min(target, length);
-        }
+        if (length > 0) target = Math.min(target, length);
 
         player.setTime(target);
         savePosition(target);
@@ -455,14 +451,14 @@ public class PlayerActivity extends Activity {
 
     private void chooseAudioTrack() {
         if (player == null || !prepared) {
-            showNotReady();
+            showMessage("Wait until playback starts.");
             return;
         }
 
         MediaPlayer.TrackDescription[] tracks = player.getAudioTracks();
 
         if (tracks == null || tracks.length == 0) {
-            showMessage("No audio tracks found in this video.");
+            showMessage("No audio tracks found.");
             return;
         }
 
@@ -471,12 +467,8 @@ public class PlayerActivity extends Activity {
 
         for (int i = 0; i < tracks.length; i++) {
             names[i] = tracks[i].name == null
-                    ? "Audio track " + (i + 1)
-                    : tracks[i].name;
-
-            if (tracks[i].id == player.getAudioTrack()) {
-                selected = i;
-            }
+                    ? "Audio track " + (i + 1) : tracks[i].name;
+            if (tracks[i].id == player.getAudioTrack()) selected = i;
         }
 
         new AlertDialog.Builder(this)
@@ -491,27 +483,22 @@ public class PlayerActivity extends Activity {
 
     private void chooseSubtitleTrack() {
         if (player == null || !prepared) {
-            showNotReady();
+            showMessage("Wait until playback starts.");
             return;
         }
 
         MediaPlayer.TrackDescription[] tracks = player.getSpuTracks();
+        int count = tracks == null ? 0 : tracks.length;
         int current = player.getSpuTrack();
 
-        int count = tracks == null ? 0 : tracks.length;
         String[] names = new String[count + 1];
         names[0] = "Subtitles Off";
-
         int selected = current == -1 ? 0 : -1;
 
         for (int i = 0; i < count; i++) {
             names[i + 1] = tracks[i].name == null
-                    ? "Subtitle " + (i + 1)
-                    : tracks[i].name;
-
-            if (tracks[i].id == current) {
-                selected = i + 1;
-            }
+                    ? "Subtitle " + (i + 1) : tracks[i].name;
+            if (tracks[i].id == current) selected = i + 1;
         }
 
         new AlertDialog.Builder(this)
@@ -519,7 +506,7 @@ public class PlayerActivity extends Activity {
                 .setSingleChoiceItems(names, selected, (dialog, which) -> {
                     if (which == 0) {
                         player.setSpuTrack(-1);
-                    } else if (tracks != null && which - 1 < tracks.length) {
+                    } else if (tracks != null) {
                         player.setSpuTrack(tracks[which - 1].id);
                     }
                     dialog.dismiss();
@@ -535,18 +522,10 @@ public class PlayerActivity extends Activity {
                     ratioIndex = which;
                     if (player != null) {
                         switch (ratios[which]) {
-                            case "4:3":
-                                player.setAspectRatio("4:3");
-                                break;
-                            case "16:9":
-                                player.setAspectRatio("16:9");
-                                break;
-                            case "18:9":
-                                player.setAspectRatio("2:1");
-                                break;
-                            default:
-                                player.setAspectRatio(null);
-                                break;
+                            case "4:3": player.setAspectRatio("4:3"); break;
+                            case "16:9": player.setAspectRatio("16:9"); break;
+                            case "18:9": player.setAspectRatio("2:1"); break;
+                            default: player.setAspectRatio(null); break;
                         }
                     }
                     dialog.dismiss();
@@ -599,9 +578,7 @@ public class PlayerActivity extends Activity {
                 .setTitle("Playback speed")
                 .setSingleChoiceItems(speedNames, speedIndex, (dialog, which) -> {
                     speedIndex = which;
-                    if (player != null) {
-                        player.setRate(speeds[which]);
-                    }
+                    if (player != null) player.setRate(speeds[which]);
                     dialog.dismiss();
                 })
                 .setNegativeButton("Cancel", null)
@@ -610,14 +587,9 @@ public class PlayerActivity extends Activity {
 
     private void showSettings() {
         String[] items = {
-                "Playback speed",
-                "Aspect ratio",
-                "Display mode",
-                "Brightness",
-                "Mute / unmute",
-                "Screen lock",
-                "Keep screen awake",
-                "File information"
+                "Playback speed", "Aspect ratio", "Display mode",
+                "Brightness", "Mute / unmute", "Screen lock",
+                "Keep screen awake", "File information"
         };
 
         new AlertDialog.Builder(this)
@@ -642,20 +614,12 @@ public class PlayerActivity extends Activity {
         bar.setMax(100);
 
         float initial = getWindow().getAttributes().screenBrightness;
-        if (initial < 0) {
-            initial = 0.5f;
-        }
+        if (initial < 0) initial = 0.5f;
         bar.setProgress((int) (initial * 100));
 
         LinearLayout layout = new LinearLayout(this);
         layout.setPadding(24, 20, 24, 10);
-        layout.addView(
-                bar,
-                new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-        );
+        layout.addView(bar, new LinearLayout.LayoutParams(-1, -2));
 
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Brightness")
@@ -665,30 +629,24 @@ public class PlayerActivity extends Activity {
 
         bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+            public void onProgressChanged(SeekBar b, int progress, boolean fromUser) {
                 WindowManager.LayoutParams p = getWindow().getAttributes();
                 p.screenBrightness = Math.max(0.01f, progress / 100f);
                 getWindow().setAttributes(p);
             }
-
             @Override
-            public void onStartTrackingTouch(SeekBar seekBar) { }
-
+            public void onStartTrackingTouch(SeekBar b) { }
             @Override
-            public void onStopTrackingTouch(SeekBar seekBar) { }
+            public void onStopTrackingTouch(SeekBar b) { }
         });
 
         dialog.show();
     }
 
     private void toggleMute() {
-        if (player == null) {
-            return;
-        }
-
+        if (player == null) return;
         muted = !muted;
         player.setVolume(muted ? 0 : 100);
-
         showMessage(muted ? "Muted" : "Sound on");
     }
 
@@ -696,10 +654,7 @@ public class PlayerActivity extends Activity {
         controlsLocked = !controlsLocked;
         controls.setVisibility(controlsLocked ? View.GONE : View.VISIBLE);
         extraControls.setVisibility(controlsLocked ? View.GONE : View.VISIBLE);
-
-        showMessage(controlsLocked
-                ? "Controls locked. Tap the video to unlock."
-                : "Controls unlocked");
+        showMessage(controlsLocked ? "Controls locked" : "Controls unlocked");
     }
 
     private void toggleKeepScreenAwake() {
@@ -721,11 +676,9 @@ public class PlayerActivity extends Activity {
 
         new AlertDialog.Builder(this)
                 .setTitle("File information")
-                .setMessage(
-                        "Name: " + videoName
-                                + "\nDuration: " + formatTime(length)
-                                + "\nURI: " + videoUri
-                )
+                .setMessage("Name: " + videoName
+                        + "\nDuration: " + formatTime(length)
+                        + "\nURI: " + videoUri)
                 .setPositiveButton("OK", null)
                 .show();
     }
@@ -753,10 +706,6 @@ public class PlayerActivity extends Activity {
         statusText.setVisibility(visibility);
     }
 
-    private void showNotReady() {
-        showMessage("Wait until playback starts.");
-    }
-
     private void showMessage(String message) {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
     }
@@ -766,9 +715,7 @@ public class PlayerActivity extends Activity {
     }
 
     private void saveCurrentPosition() {
-        if (player != null && prepared) {
-            savePosition(player.getTime());
-        }
+        if (player != null && prepared) savePosition(player.getTime());
     }
 
     private void savePosition(long position) {
@@ -784,26 +731,18 @@ public class PlayerActivity extends Activity {
         long remaining = seconds % 60;
 
         if (hours > 0) {
-            return String.format(
-                    Locale.getDefault(), "%d:%02d:%02d",
-                    hours, minutes, remaining
-            );
+            return String.format(Locale.getDefault(),
+                    "%d:%02d:%02d", hours, minutes, remaining);
         }
 
-        return String.format(
-                Locale.getDefault(), "%02d:%02d",
-                minutes, remaining
-        );
+        return String.format(Locale.getDefault(),
+                "%02d:%02d", minutes, remaining);
     }
 
     @Override
     protected void onPause() {
         saveCurrentPosition();
-
-        if (player != null && player.isPlaying()) {
-            player.pause();
-        }
-
+        if (player != null && player.isPlaying()) player.pause();
         super.onPause();
     }
 
@@ -812,19 +751,7 @@ public class PlayerActivity extends Activity {
         released = true;
         handler.removeCallbacks(progressTask);
         saveCurrentPosition();
-
-        if (player != null) {
-            player.stop();
-            player.detachViews();
-            player.release();
-            player = null;
-        }
-
-        if (libVLC != null) {
-            libVLC.release();
-            libVLC = null;
-        }
-
+        releasePlayer();
         super.onDestroy();
     }
 }
