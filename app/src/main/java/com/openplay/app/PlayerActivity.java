@@ -7,6 +7,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import android.view.Gravity;
 import android.widget.Button;
 import android.widget.LinearLayout;
@@ -24,22 +25,25 @@ import java.util.Locale;
 
 public class PlayerActivity extends Activity {
 
+private static final String TAG = "OpenPlay";
+
 private LibVLC libVLC;
 private MediaPlayer mediaPlayer;
 private VLCVideoLayout videoLayout;
 
 private TextView timeText;
-private SeekBar seekBar;
 private Button playButton;
+private SeekBar seekBar;
 
 private SharedPreferences preferences;
 private String videoUri;
 private String videoName;
 
-private boolean isSeeking = false;
-private boolean isPrepared = false;
+private boolean isSeeking;
+private boolean isPrepared;
 private boolean restorePending = true;
-private long savedPosition = 0;
+private boolean errorShown;
+private long savedPosition;
 
 private final Handler handler =
         new Handler(Looper.getMainLooper());
@@ -59,8 +63,7 @@ protected void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
 
     preferences = getSharedPreferences(
-            "OpenPlayPlayback", MODE_PRIVATE
-    );
+            "OpenPlayPlayback", MODE_PRIVATE);
 
     videoUri = getIntent().getStringExtra("video_uri");
     videoName = getIntent().getStringExtra("video_name");
@@ -102,8 +105,7 @@ private void createInterface() {
 
     videoLayout = new VLCVideoLayout(this);
     root.addView(videoLayout, new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1
-    ));
+            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
 
     timeText = new TextView(this);
     timeText.setText("00:00 / 00:00");
@@ -162,73 +164,103 @@ private void createInterface() {
                 public void onProgressChanged(
                         SeekBar bar, int progress, boolean fromUser) {
                 }
-            }
-    );
+            });
 }
 
 private void startPlayer() {
     try {
         ArrayList<String> options = new ArrayList<>();
         options.add("--no-video-title-show");
+        options.add("--avcodec-hw=any");
 
         libVLC = new LibVLC(this, options);
         mediaPlayer = new MediaPlayer(libVLC);
 
         mediaPlayer.setEventListener(event ->
-                runOnUiThread(() -> {
-                    switch (event.type) {
-                        case MediaPlayer.Event.Playing:
-                            isPrepared = true;
-                            playButton.setText("PAUSE");
-
-                            if (restorePending) {
-                                restorePending = false;
-                                if (savedPosition > 0) {
-                                    mediaPlayer.setTime(savedPosition);
-                                }
-                            }
-
-                            updateProgress();
-                            break;
-
-                        case MediaPlayer.Event.LengthChanged:
-                        case MediaPlayer.Event.TimeChanged:
-                            updateProgress();
-                            break;
-
-                        case MediaPlayer.Event.EncounteredError:
-                            isPrepared = false;
-                            playButton.setText("RETRY");
-                            Toast.makeText(
-                                    PlayerActivity.this,
-                                    "VLC could not decode this video",
-                                    Toast.LENGTH_LONG
-                            ).show();
-                            break;
-
-                        case MediaPlayer.Event.Stopped:
-                            playButton.setText("PLAY");
-                            break;
-                    }
-                })
-        );
+                runOnUiThread(() -> handleVlcEvent(event)));
 
         mediaPlayer.attachViews(videoLayout, null, false, false);
 
         savedPosition = preferences.getLong(positionKey(), 0L);
 
-        Media media = new Media(libVLC, Uri.parse(videoUri));
+        Uri uri = Uri.parse(videoUri);
+        Media media = new Media(libVLC, uri);
+
+        media.setHWDecoderEnabled(true, false);
         mediaPlayer.setMedia(media);
         media.release();
 
         mediaPlayer.play();
+        handler.removeCallbacks(progressUpdater);
         handler.post(progressUpdater);
 
     } catch (Exception e) {
-        Toast.makeText(this,
-                "Player error: " + e.getMessage(),
-                Toast.LENGTH_LONG).show();
+        Log.e(TAG, "Could not initialize VLC player", e);
+        showPlaybackError("Could not start VLC: " + e.getMessage());
     }
+}
+
+private void handleVlcEvent(MediaPlayer.Event event) {
+    switch (event.type) {
+        case MediaPlayer.Event.Opening:
+            playButton.setText("LOADING");
+            break;
+
+        case MediaPlayer.Event.Playing:
+            isPrepared = true;
+            errorShown = false;
+            playButton.setText("PAUSE");
+
+            if (restorePending) {
+                restorePending = false;
+                if (savedPosition > 0) {
+                    mediaPlayer.setTime(savedPosition);
+                }
+            }
+
+            updateProgress();
+            break;
+
+        case MediaPlayer.Event.LengthChanged:
+        case MediaPlayer.Event.TimeChanged:
+            updateProgress();
+            break;
+
+        case MediaPlayer.Event.Paused:
+            playButton.setText("PLAY");
+            break;
+
+        case MediaPlayer.Event.Stopped:
+            playButton.setText("PLAY");
+            break;
+
+        case MediaPlayer.Event.EncounteredError:
+            isPrepared = false;
+            playButton.setText("RETRY");
+            Log.e(TAG, "VLC EncounteredError for video: " + videoName
+                    + ", URI: " + videoUri);
+            showPlaybackError(
+                    "VLC playback failed. Try retrying or another file.");
+            break;
+
+        case MediaPlayer.Event.EndReached:
+            isPrepared = false;
+            preferences.edit().remove(positionKey()).apply();
+            playButton.setText("PLAY");
+            break;
+
+        default:
+            break;
+    }
+}
+
+private void showPlaybackError(String message) {
+    if (errorShown || isFinishing()) {
+        return;
+    }
+
+    errorShown = true;
+    Toast.makeText(this, message, Toast.LENGTH_LONG).show();
 }
 
 private String positionKey() {
@@ -245,8 +277,9 @@ private void togglePlayback() {
         savePosition();
         playButton.setText("PLAY");
     } else {
-        mediaPlayer.play();
+        errorShown = false;
         playButton.setText("LOADING");
+        mediaPlayer.play();
     }
 }
 
@@ -256,7 +289,7 @@ private void seekRelative(long offset) {
     }
 
     long current = Math.max(0, mediaPlayer.getTime());
-    long length = mediaPlayer.getLength();
+    long length = Math.max(0, mediaPlayer.getLength());
     long target = Math.max(0, current + offset);
 
     if (length > 0) {
@@ -278,8 +311,7 @@ private void updateProgress() {
 
     if (!isSeeking && length > 0) {
         seekBar.setProgress((int) Math.min(
-                1000, current * 1000L / length
-        ));
+                1000, current * 1000L / length));
     }
 
     timeText.setText(formatTime(current) + " / " + formatTime(length));
@@ -290,25 +322,28 @@ private void updateProgress() {
 
     if (isPrepared) {
         playButton.setText(
-                mediaPlayer.isPlaying() ? "PAUSE" : "PLAY"
-        );
+                mediaPlayer.isPlaying() ? "PAUSE" : "PLAY");
     }
 }
 
 private void savePosition() {
-    if (mediaPlayer != null && isPrepared) {
-        long current = mediaPlayer.getTime();
-        long length = mediaPlayer.getLength();
+    if (mediaPlayer == null || !isPrepared) {
+        return;
+    }
 
-        if (current > 0 && (length <= 0 || current < length - 1500)) {
-            savePositionAt(current);
-        }
+    long current = mediaPlayer.getTime();
+    long length = mediaPlayer.getLength();
+
+    if (current > 0 && (length <= 0 || current < length - 1500)) {
+        savePositionAt(current);
     }
 }
 
 private void savePositionAt(long position) {
     if (position > 0) {
-        preferences.edit().putLong(positionKey(), position).apply();
+        preferences.edit()
+                .putLong(positionKey(), position)
+                .apply();
     }
 }
 
@@ -341,7 +376,6 @@ protected void onPause() {
 @Override
 protected void onDestroy() {
     handler.removeCallbacks(progressUpdater);
-
     savePosition();
 
     if (mediaPlayer != null) {
