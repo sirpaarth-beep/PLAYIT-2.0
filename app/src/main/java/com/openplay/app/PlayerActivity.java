@@ -197,6 +197,7 @@ private void createInterface() {
     modeText.setText("Ratio: Original | Display: Fit | Rotation: 0°");
     modeText.setTextColor(Color.LTGRAY);
     modeText.setGravity(Gravity.CENTER);
+    modeText.setPadding(4, 4, 4, 8);
     root.addView(modeText);
 
     setContentView(root);
@@ -222,6 +223,7 @@ private void startPlayer() {
         media.release();
 
         mediaPlayer.play();
+
         handler.removeCallbacks(updater);
         handler.post(updater);
 
@@ -244,6 +246,7 @@ private void handleEvent(MediaPlayer.Event event) {
                     mediaPlayer.setTime(savedPosition);
                 }
             }
+
             updateProgress();
             break;
 
@@ -262,7 +265,7 @@ private void handleEvent(MediaPlayer.Event event) {
             playButton.setText("Retry");
             Log.e("OpenPlay", "VLC playback error: " + videoUri);
             Toast.makeText(this,
-                    "Playback failed. Check file or codec compatibility.",
+                    "Playback failed. Try another file.",
                     Toast.LENGTH_LONG).show();
             break;
 
@@ -334,9 +337,8 @@ private void updateProgress() {
 private void rotateVideo() {
     rotation = (rotation + 90) % 360;
 
-    if (mediaPlayer != null) {
-        mediaPlayer.setVideoRotation(
-                MediaPlayer.Rotation.values()[rotation / 90]);
+    if (videoLayout != null) {
+        videoLayout.setRotation((float) rotation);
     }
 
     updateModeText();
