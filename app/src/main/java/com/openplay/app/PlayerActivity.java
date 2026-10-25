@@ -1,3 +1,4 @@
+
 package com.openplay.app;
 
 import android.app.Activity;
@@ -21,7 +22,6 @@ import android.widget.Toast;
 import org.videolan.libvlc.LibVLC;
 import org.videolan.libvlc.Media;
 import org.videolan.libvlc.MediaPlayer;
-import org.videolan.libvlc.interfaces.ILibVLC;
 import org.videolan.libvlc.util.VLCVideoLayout;
 
 import java.util.ArrayList;
@@ -30,18 +30,16 @@ import java.util.Locale;
 public class PlayerActivity extends Activity {
 
     private LibVLC libVLC;
-    private MediaPlayer mediaPlayer;
+    private MediaPlayer player;
     private VLCVideoLayout videoLayout;
-
-    private LinearLayout controls;
-    private LinearLayout extraControls;
 
     private TextView titleText;
     private TextView timeText;
     private TextView statusText;
-
     private SeekBar seekBar;
     private Button playButton;
+    private LinearLayout controls;
+    private LinearLayout extraControls;
 
     private SharedPreferences preferences;
     private String videoUri;
@@ -51,12 +49,22 @@ public class PlayerActivity extends Activity {
     private boolean seeking = false;
     private boolean controlsLocked = false;
     private boolean landscape = false;
-    private boolean keepScreenAwake = false;
     private boolean muted = false;
+    private boolean keepScreenAwake = false;
+    private boolean released = false;
 
+    private int speedIndex = 2;
     private int ratioIndex = 0;
     private int displayIndex = 0;
-    private int speedIndex = 2;
+
+    private final float[] speeds = {
+            0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f
+    };
+
+    private final String[] speedNames = {
+            "0.5x", "0.75x", "1.0x",
+            "1.25x", "1.5x", "2.0x"
+    };
 
     private final String[] ratios = {
             "Original", "4:3", "16:9", "18:9"
@@ -66,19 +74,20 @@ public class PlayerActivity extends Activity {
             "Fit", "Fill", "Stretch", "Zoom"
     };
 
-    private final float[] speeds = {
-            0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f
-    };
-
     private final Handler handler =
             new Handler(Looper.getMainLooper());
 
-    private final Runnable progressUpdater = new Runnable() {
+    private final Runnable progressTask = new Runnable() {
         @Override
         public void run() {
-            if (mediaPlayer != null && prepared) {
+            if (released) {
+                return;
+            }
+
+            if (player != null && prepared) {
                 updateProgress();
             }
+
             handler.postDelayed(this, 500);
         }
     };
@@ -104,8 +113,7 @@ public class PlayerActivity extends Activity {
 
         if (videoUri == null) {
             Toast.makeText(
-                    this,
-                    "Video could not be opened",
+                    this, "No video URI received",
                     Toast.LENGTH_LONG
             ).show();
             finish();
@@ -116,8 +124,8 @@ public class PlayerActivity extends Activity {
         getWindow().setNavigationBarColor(Color.BLACK);
 
         createInterface();
-        startPlayer();
-        handler.post(progressUpdater);
+        handler.post(progressTask);
+        startPlayback();
     }
 
     private void createInterface() {
@@ -138,15 +146,13 @@ public class PlayerActivity extends Activity {
                 videoLayout,
                 new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT,
-                        0,
-                        1
+                        0, 1
                 )
         );
 
         statusText = new TextView(this);
-        statusText.setText("Loading video...");
+        statusText.setText("Opening video...");
         statusText.setTextColor(Color.LTGRAY);
-        statusText.setTextSize(12);
         statusText.setGravity(Gravity.CENTER);
         root.addView(statusText);
 
@@ -154,7 +160,6 @@ public class PlayerActivity extends Activity {
         timeText.setText("00:00 / 00:00");
         timeText.setTextColor(Color.WHITE);
         timeText.setGravity(Gravity.CENTER);
-        timeText.setPadding(8, 4, 8, 0);
         root.addView(timeText);
 
         seekBar = new SeekBar(this);
@@ -163,57 +168,47 @@ public class PlayerActivity extends Activity {
 
         controls = new LinearLayout(this);
         controls.setGravity(Gravity.CENTER);
-        controls.setPadding(4, 2, 4, 2);
 
-        Button backButton = makeButton("-10s");
-        backButton.setOnClickListener(
-                v -> seekRelative(-10000)
-        );
-        controls.addView(backButton);
+        Button back = makeButton("-10s");
+        back.setOnClickListener(v -> seekBy(-10000));
+        controls.addView(back);
 
         playButton = makeButton("PLAY");
         playButton.setOnClickListener(v -> togglePlayback());
         controls.addView(playButton);
 
-        Button forwardButton = makeButton("+10s");
-        forwardButton.setOnClickListener(
-                v -> seekRelative(10000)
-        );
-        controls.addView(forwardButton);
+        Button forward = makeButton("+10s");
+        forward.setOnClickListener(v -> seekBy(10000));
+        controls.addView(forward);
 
         root.addView(controls);
 
         extraControls = new LinearLayout(this);
         extraControls.setGravity(Gravity.CENTER);
-        extraControls.setPadding(4, 2, 4, 8);
 
-        Button rotateButton = makeButton("ROTATE");
-        rotateButton.setOnClickListener(v -> rotateScreen());
-        extraControls.addView(rotateButton);
+        Button rotate = makeButton("ROTATE");
+        rotate.setOnClickListener(v -> rotateScreen());
+        extraControls.addView(rotate);
 
-        Button ratioButton = makeButton("RATIO");
-        ratioButton.setOnClickListener(v -> chooseRatio());
-        extraControls.addView(ratioButton);
+        Button ratio = makeButton("RATIO");
+        ratio.setOnClickListener(v -> chooseRatio());
+        extraControls.addView(ratio);
 
-        Button displayButton = makeButton("FIT / ZOOM");
-        displayButton.setOnClickListener(
-                v -> chooseDisplayMode()
-        );
-        extraControls.addView(displayButton);
+        Button display = makeButton("FIT/ZOOM");
+        display.setOnClickListener(v -> chooseDisplayMode());
+        extraControls.addView(display);
 
-        Button audioButton = makeButton("AUDIO");
-        audioButton.setOnClickListener(v -> showAudioTracks());
-        extraControls.addView(audioButton);
+        Button audio = makeButton("AUDIO");
+        audio.setOnClickListener(v -> chooseAudioTrack());
+        extraControls.addView(audio);
 
-        Button subtitlesButton = makeButton("SUBTITLES");
-        subtitlesButton.setOnClickListener(
-                v -> showSubtitleTracks()
-        );
-        extraControls.addView(subtitlesButton);
+        Button subtitles = makeButton("SUBTITLES");
+        subtitles.setOnClickListener(v -> chooseSubtitleTrack());
+        extraControls.addView(subtitles);
 
-        Button settingsButton = makeButton("SETTINGS");
-        settingsButton.setOnClickListener(v -> showSettings());
-        extraControls.addView(settingsButton);
+        Button settings = makeButton("SETTINGS");
+        settings.setOnClickListener(v -> showSettings());
+        extraControls.addView(settings);
 
         root.addView(extraControls);
         setContentView(root);
@@ -227,15 +222,12 @@ public class PlayerActivity extends Activity {
 
                     @Override
                     public void onStopTrackingTouch(SeekBar bar) {
-                        if (mediaPlayer != null && prepared) {
-                            long length = mediaPlayer.getLength();
-
+                        if (player != null && prepared) {
+                            long length = player.getLength();
                             if (length > 0) {
                                 long target =
-                                        length * bar.getProgress()
-                                                / 1000L;
-
-                                mediaPlayer.setTime(target);
+                                        length * bar.getProgress() / 1000L;
+                                player.setTime(target);
                                 savePosition(target);
                             }
                         }
@@ -244,10 +236,8 @@ public class PlayerActivity extends Activity {
 
                     @Override
                     public void onProgressChanged(
-                            SeekBar bar,
-                            int progress,
-                            boolean fromUser
-                    ) {
+                            SeekBar bar, int progress,
+                            boolean fromUser) {
                     }
                 }
         );
@@ -267,23 +257,38 @@ public class PlayerActivity extends Activity {
                         LinearLayout.LayoutParams.WRAP_CONTENT,
                         1
                 );
-
-        params.setMargins(2, 2, 2, 2);
+        params.setMargins(1, 1, 1, 1);
         button.setLayoutParams(params);
         return button;
     }
 
-    private void startPlayer() {
+    private void startPlayback() {
         try {
+            released = false;
+            prepared = false;
+            statusText.setText("Starting VLC...");
+
             ArrayList<String> options = new ArrayList<>();
             options.add("--no-video-title-show");
 
             libVLC = new LibVLC(this, options);
-            mediaPlayer = new MediaPlayer(libVLC);
+            player = new MediaPlayer(libVLC);
 
-            mediaPlayer.setEventListener(event ->
+            player.setEventListener(event ->
                     runOnUiThread(() -> {
+                        if (released || player == null) {
+                            return;
+                        }
+
                         switch (event.type) {
+                            case MediaPlayer.Event.Opening:
+                                statusText.setText("Opening video...");
+                                break;
+
+                            case MediaPlayer.Event.Buffering:
+                                statusText.setText("Buffering...");
+                                break;
+
                             case MediaPlayer.Event.Playing:
                                 prepared = true;
                                 playButton.setText("PAUSE");
@@ -294,103 +299,103 @@ public class PlayerActivity extends Activity {
                             case MediaPlayer.Event.Paused:
                                 playButton.setText("PLAY");
                                 saveCurrentPosition();
+                                statusText.setText("Paused");
                                 break;
 
                             case MediaPlayer.Event.Stopped:
                                 playButton.setText("PLAY");
                                 break;
 
+                            case MediaPlayer.Event.EncounteredError:
+                                prepared = false;
+                                playButton.setText("RETRY");
+                                statusText.setText("VLC playback error");
+                                Toast.makeText(
+                                        PlayerActivity.this,
+                                        "Playback failed. Check file access and VLC logs.",
+                                        Toast.LENGTH_LONG
+                                ).show();
+                                break;
+
                             case MediaPlayer.Event.LengthChanged:
                             case MediaPlayer.Event.TimeChanged:
                                 updateProgress();
-                                break;
-
-                            case MediaPlayer.Event.EncounteredError:
-                                prepared = false;
-                                statusText.setText("Playback failed");
-                                playButton.setText("RETRY");
-                                Toast.makeText(
-                                        PlayerActivity.this,
-                                        "Unable to play this video",
-                                        Toast.LENGTH_LONG
-                                ).show();
                                 break;
                         }
                     })
             );
 
-            mediaPlayer.attachViews(
-                    videoLayout, null, false, false
-            );
+            player.attachViews(videoLayout, null, false, false);
 
-            Media media = new Media(
-                    libVLC, Uri.parse(videoUri)
-            );
+            Uri uri = Uri.parse(videoUri);
+            Media media = new Media(libVLC, uri);
 
-            mediaPlayer.setMedia(media);
+            mediaPlayerSetMedia(media);
             media.release();
-            mediaPlayer.play();
 
-            long savedPosition = preferences.getLong(
-                    positionKey(), 0L
-            );
-
-            if (savedPosition > 0) {
+            long saved = preferences.getLong(positionKey(), 0L);
+            if (saved > 0) {
                 handler.postDelayed(() -> {
-                    if (mediaPlayer != null && prepared) {
-                        mediaPlayer.setTime(savedPosition);
+                    if (player != null && prepared) {
+                        player.setTime(saved);
                     }
-                }, 1500);
+                }, 1200);
             }
 
+            player.play();
+
         } catch (Exception e) {
-            statusText.setText("Unable to start player");
+            prepared = false;
+            statusText.setText("Unable to start playback");
             Toast.makeText(
                     this,
-                    "Player error: " + e.getMessage(),
+                    "Player error: " + e.getClass().getSimpleName()
+                            + ": " + e.getMessage(),
                     Toast.LENGTH_LONG
             ).show();
         }
     }
 
+    private void mediaPlayerSetMedia(Media media) {
+        player.setMedia(media);
+    }
+
     private void togglePlayback() {
-        if (mediaPlayer == null) {
+        if (player == null) {
             return;
         }
 
         try {
-            if (mediaPlayer.isPlaying()) {
-                mediaPlayer.pause();
+            if (player.isPlaying()) {
+                player.pause();
             } else if (prepared) {
-                mediaPlayer.play();
+                player.play();
             } else {
                 Toast.makeText(
                         this,
-                        "Player is not ready. Reopen the video.",
+                        "Video is not ready. Reopen or retry.",
                         Toast.LENGTH_SHORT
                 ).show();
             }
         } catch (Exception e) {
             Toast.makeText(
-                    this,
-                    "Unable to change playback",
+                    this, "Playback control failed",
                     Toast.LENGTH_SHORT
             ).show();
         }
     }
 
     private void updateProgress() {
-        if (mediaPlayer == null || timeText == null) {
+        if (player == null || !prepared) {
             return;
         }
 
-        long current = Math.max(0, mediaPlayer.getTime());
-        long length = Math.max(0, mediaPlayer.getLength());
+        long current = Math.max(0, player.getTime());
+        long length = Math.max(0, player.getLength());
 
         if (!seeking && length > 0) {
             seekBar.setProgress((int) Math.min(
-                    1000,
-                    current * 1000L / length
+                    1000, current * 1000L / length
             ));
         }
 
@@ -399,55 +404,42 @@ public class PlayerActivity extends Activity {
         );
 
         if (length > 0 && current >= length - 1500) {
-            preferences.edit()
-                    .remove(positionKey())
-                    .apply();
+            preferences.edit().remove(positionKey()).apply();
         } else if (current > 0) {
             savePosition(current);
         }
 
-        playButton.setText(
-                mediaPlayer.isPlaying() ? "PAUSE" : "PLAY"
-        );
+        playButton.setText(player.isPlaying() ? "PAUSE" : "PLAY");
     }
 
-    private void seekRelative(long offset) {
-        if (mediaPlayer == null || !prepared) {
+    private void seekBy(long offset) {
+        if (player == null || !prepared) {
             return;
         }
 
-        long current = Math.max(0, mediaPlayer.getTime());
-        long length = mediaPlayer.getLength();
+        long current = Math.max(0, player.getTime());
+        long length = player.getLength();
         long target = Math.max(0, current + offset);
 
         if (length > 0) {
             target = Math.min(target, length);
         }
 
-        mediaPlayer.setTime(target);
+        player.setTime(target);
         savePosition(target);
         updateProgress();
     }
 
-    private void showAudioTracks() {
-        if (mediaPlayer == null || !prepared) {
-            Toast.makeText(
-                    this,
-                    "Wait until the video starts playing",
-                    Toast.LENGTH_SHORT
-            ).show();
+    private void chooseAudioTrack() {
+        if (player == null || !prepared) {
+            showNotReady();
             return;
         }
 
-        MediaPlayer.TrackDescription[] tracks =
-                mediaPlayer.getAudioTracks();
+        MediaPlayer.TrackDescription[] tracks = player.getAudioTracks();
 
         if (tracks == null || tracks.length == 0) {
-            Toast.makeText(
-                    this,
-                    "No audio tracks available",
-                    Toast.LENGTH_SHORT
-            ).show();
+            showMessage("No audio tracks found in this video.");
             return;
         }
 
@@ -459,76 +451,56 @@ public class PlayerActivity extends Activity {
                     ? "Audio track " + (i + 1)
                     : tracks[i].name;
 
-            if (tracks[i].id == mediaPlayer.getAudioTrack()) {
+            if (tracks[i].id == player.getAudioTrack()) {
                 selected = i;
             }
         }
 
         new AlertDialog.Builder(this)
-                .setTitle("Audio Track")
-                .setSingleChoiceItems(
-                        names,
-                        selected,
-                        (dialog, which) -> {
-                            mediaPlayer.setAudioTrack(tracks[which].id);
-                            dialog.dismiss();
-                        }
-                )
+                .setTitle("Audio track")
+                .setSingleChoiceItems(names, selected, (dialog, which) -> {
+                    player.setAudioTrack(tracks[which].id);
+                    dialog.dismiss();
+                })
                 .setNegativeButton("Cancel", null)
                 .show();
     }
 
-    private void showSubtitleTracks() {
-        if (mediaPlayer == null || !prepared) {
-            Toast.makeText(
-                    this,
-                    "Wait until the video starts playing",
-                    Toast.LENGTH_SHORT
-            ).show();
+    private void chooseSubtitleTrack() {
+        if (player == null || !prepared) {
+            showNotReady();
             return;
         }
 
-        MediaPlayer.TrackDescription[] tracks =
-                mediaPlayer.getSpuTracks();
+        MediaPlayer.TrackDescription[] tracks = player.getSpuTracks();
+        int current = player.getSpuTrack();
 
-        int currentTrack = mediaPlayer.getSpuTrack();
-        int selected = 0;
+        int count = tracks == null ? 0 : tracks.length;
+        String[] names = new String[count + 1];
+        names[0] = "Subtitles Off";
 
-        String[] names;
-        if (tracks == null || tracks.length == 0) {
-            names = new String[]{"Subtitles Off"};
-        } else {
-            names = new String[tracks.length + 1];
-            names[0] = "Subtitles Off";
+        int selected = current == -1 ? 0 : -1;
 
-            for (int i = 0; i < tracks.length; i++) {
-                names[i + 1] = tracks[i].name == null
-                        ? "Subtitle " + (i + 1)
-                        : tracks[i].name;
+        for (int i = 0; i < count; i++) {
+            names[i + 1] = tracks[i].name == null
+                    ? "Subtitle " + (i + 1)
+                    : tracks[i].name;
 
-                if (tracks[i].id == currentTrack) {
-                    selected = i + 1;
-                }
+            if (tracks[i].id == current) {
+                selected = i + 1;
             }
         }
 
         new AlertDialog.Builder(this)
                 .setTitle("Subtitles")
-                .setSingleChoiceItems(
-                        names,
-                        selected,
-                        (dialog, which) -> {
-                            if (which == 0) {
-                                mediaPlayer.setSpuTrack(-1);
-                            } else if (tracks != null
-                                    && which - 1 < tracks.length) {
-                                mediaPlayer.setSpuTrack(
-                                        tracks[which - 1].id
-                                );
-                            }
-                            dialog.dismiss();
-                        }
-                )
+                .setSingleChoiceItems(names, selected, (dialog, which) -> {
+                    if (which == 0) {
+                        player.setSpuTrack(-1);
+                    } else if (tracks != null && which - 1 < tracks.length) {
+                        player.setSpuTrack(tracks[which - 1].id);
+                    }
+                    dialog.dismiss();
+                })
                 .setNegativeButton("Cancel", null)
                 .show();
     }
@@ -536,89 +508,62 @@ public class PlayerActivity extends Activity {
     private void chooseRatio() {
         new AlertDialog.Builder(this)
                 .setTitle("Aspect ratio")
-                .setSingleChoiceItems(
-                        ratios,
-                        ratioIndex,
-                        (dialog, which) -> {
-                            ratioIndex = which;
-                            applyRatio();
-                            dialog.dismiss();
+                .setSingleChoiceItems(ratios, ratioIndex, (dialog, which) -> {
+                    ratioIndex = which;
+                    if (player != null) {
+                        switch (ratios[which]) {
+                            case "4:3":
+                                player.setAspectRatio("4:3");
+                                break;
+                            case "16:9":
+                                player.setAspectRatio("16:9");
+                                break;
+                            case "18:9":
+                                player.setAspectRatio("2:1");
+                                break;
+                            default:
+                                player.setAspectRatio(null);
+                                break;
                         }
-                )
+                    }
+                    dialog.dismiss();
+                })
                 .setNegativeButton("Cancel", null)
                 .show();
-    }
-
-    private void applyRatio() {
-        if (mediaPlayer == null) {
-            return;
-        }
-
-        switch (ratios[ratioIndex]) {
-            case "4:3":
-                mediaPlayer.setAspectRatio("4:3");
-                break;
-            case "16:9":
-                mediaPlayer.setAspectRatio("16:9");
-                break;
-            case "18:9":
-                mediaPlayer.setAspectRatio("2:1");
-                break;
-            default:
-                mediaPlayer.setAspectRatio(null);
-                break;
-        }
-
-        statusText.setText("Ratio: " + ratios[ratioIndex]);
     }
 
     private void chooseDisplayMode() {
         new AlertDialog.Builder(this)
                 .setTitle("Display mode")
-                .setSingleChoiceItems(
-                        displayModes,
-                        displayIndex,
-                        (dialog, which) -> {
-                            displayIndex = which;
-                            applyDisplayMode();
-                            dialog.dismiss();
+                .setSingleChoiceItems(displayModes, displayIndex, (dialog, which) -> {
+                    displayIndex = which;
+                    if (player != null) {
+                        switch (displayModes[which]) {
+                            case "Fit":
+                                player.setScale(0f);
+                                player.setAspectRatio(null);
+                                break;
+                            case "Fill":
+                                player.setScale(0f);
+                                player.setAspectRatio("16:9");
+                                break;
+                            case "Stretch":
+                                player.setScale(0f);
+                                player.setAspectRatio(null);
+                                break;
+                            case "Zoom":
+                                player.setScale(1.5f);
+                                break;
                         }
-                )
+                    }
+                    dialog.dismiss();
+                })
                 .setNegativeButton("Cancel", null)
                 .show();
     }
 
-    private void applyDisplayMode() {
-        if (mediaPlayer == null) {
-            return;
-        }
-
-        switch (displayModes[displayIndex]) {
-            case "Fit":
-                mediaPlayer.setScale(0f);
-                mediaPlayer.setAspectRatio(null);
-                break;
-            case "Fill":
-                mediaPlayer.setScale(0f);
-                mediaPlayer.setAspectRatio("16:9");
-                break;
-            case "Stretch":
-                mediaPlayer.setScale(0f);
-                mediaPlayer.setAspectRatio(null);
-                break;
-            case "Zoom":
-                mediaPlayer.setScale(1.5f);
-                break;
-        }
-
-        statusText.setText(
-                "Display: " + displayModes[displayIndex]
-        );
-    }
-
     private void rotateScreen() {
         landscape = !landscape;
-
         setRequestedOrientation(
                 landscape
                         ? ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
@@ -627,26 +572,15 @@ public class PlayerActivity extends Activity {
     }
 
     private void chooseSpeed() {
-        String[] labels = {
-                "0.5x", "0.75x", "1.0x",
-                "1.25x", "1.5x", "2.0x"
-        };
-
         new AlertDialog.Builder(this)
                 .setTitle("Playback speed")
-                .setSingleChoiceItems(
-                        labels,
-                        speedIndex,
-                        (dialog, which) -> {
-                            speedIndex = which;
-
-                            if (mediaPlayer != null) {
-                                mediaPlayer.setRate(speeds[which]);
-                            }
-
-                            dialog.dismiss();
-                        }
-                )
+                .setSingleChoiceItems(speedNames, speedIndex, (dialog, which) -> {
+                    speedIndex = which;
+                    if (player != null) {
+                        player.setRate(speeds[which]);
+                    }
+                    dialog.dismiss();
+                })
                 .setNegativeButton("Cancel", null)
                 .show();
     }
@@ -667,30 +601,14 @@ public class PlayerActivity extends Activity {
                 .setTitle("OpenPlay settings")
                 .setItems(items, (dialog, which) -> {
                     switch (which) {
-                        case 0:
-                            chooseSpeed();
-                            break;
-                        case 1:
-                            chooseRatio();
-                            break;
-                        case 2:
-                            chooseDisplayMode();
-                            break;
-                        case 3:
-                            chooseBrightness();
-                            break;
-                        case 4:
-                            toggleMute();
-                            break;
-                        case 5:
-                            toggleLock();
-                            break;
-                        case 6:
-                            toggleKeepScreenAwake();
-                            break;
-                        case 7:
-                            showFileInfo();
-                            break;
+                        case 0: chooseSpeed(); break;
+                        case 1: chooseRatio(); break;
+                        case 2: chooseDisplayMode(); break;
+                        case 3: chooseBrightness(); break;
+                        case 4: toggleMute(); break;
+                        case 5: toggleLock(); break;
+                        case 6: toggleKeepScreenAwake(); break;
+                        case 7: showFileInfo(); break;
                     }
                 })
                 .show();
@@ -700,23 +618,15 @@ public class PlayerActivity extends Activity {
         SeekBar bar = new SeekBar(this);
         bar.setMax(100);
 
-        WindowManager.LayoutParams params =
-                getWindow().getAttributes();
-
-        float initial = params.screenBrightness < 0
-                ? 0.5f : params.screenBrightness;
-
+        float initial = getWindow().getAttributes().screenBrightness;
+        if (initial < 0) {
+            initial = 0.5f;
+        }
         bar.setProgress((int) (initial * 100));
 
         LinearLayout layout = new LinearLayout(this);
         layout.setPadding(24, 20, 24, 10);
-        layout.addView(
-                bar,
-                new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-        );
+        layout.addView(bar);
 
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Brightness")
@@ -724,108 +634,69 @@ public class PlayerActivity extends Activity {
                 .setPositiveButton("Done", null)
                 .create();
 
-        bar.setOnSeekBarChangeListener(
-                new SeekBar.OnSeekBarChangeListener() {
-                    @Override
-                    public void onProgressChanged(
-                            SeekBar seekBar,
-                            int progress,
-                            boolean fromUser
-                    ) {
-                        WindowManager.LayoutParams p =
-                                getWindow().getAttributes();
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                WindowManager.LayoutParams p = getWindow().getAttributes();
+                p.screenBrightness = Math.max(0.01f, progress / 100f);
+                getWindow().setAttributes(p);
+            }
 
-                        p.screenBrightness =
-                                Math.max(0.01f, progress / 100f);
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) { }
 
-                        getWindow().setAttributes(p);
-                    }
-
-                    @Override
-                    public void onStartTrackingTouch(SeekBar seekBar) {
-                    }
-
-                    @Override
-                    public void onStopTrackingTouch(SeekBar seekBar) {
-                    }
-                }
-        );
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) { }
+        });
 
         dialog.show();
     }
 
     private void toggleMute() {
-        if (mediaPlayer == null) {
+        if (player == null) {
             return;
         }
 
         muted = !muted;
-        mediaPlayer.setVolume(muted ? 0 : 100);
+        player.setVolume(muted ? 0 : 100);
 
-        Toast.makeText(
-                this,
-                muted ? "Muted" : "Sound on",
-                Toast.LENGTH_SHORT
-        ).show();
+        showMessage(muted ? "Muted" : "Sound on");
     }
 
     private void toggleLock() {
         controlsLocked = !controlsLocked;
+        controls.setVisibility(controlsLocked ? View.GONE : View.VISIBLE);
+        extraControls.setVisibility(controlsLocked ? View.GONE : View.VISIBLE);
 
-        if (controlsLocked) {
-            controls.setVisibility(View.GONE);
-            extraControls.setVisibility(View.GONE);
-            Toast.makeText(
-                    this,
-                    "Controls locked. Tap video to unlock.",
-                    Toast.LENGTH_SHORT
-            ).show();
-        } else {
-            controls.setVisibility(View.VISIBLE);
-            extraControls.setVisibility(View.VISIBLE);
-            Toast.makeText(
-                    this,
-                    "Controls unlocked",
-                    Toast.LENGTH_SHORT
-            ).show();
-        }
+        showMessage(controlsLocked
+                ? "Controls locked. Tap the video to unlock."
+                : "Controls unlocked");
     }
 
     private void toggleKeepScreenAwake() {
         keepScreenAwake = !keepScreenAwake;
 
         if (keepScreenAwake) {
-            getWindow().addFlags(
-                    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-            );
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         } else {
-            getWindow().clearFlags(
-                    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-            );
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         }
 
-        Toast.makeText(
-                this,
-                keepScreenAwake
-                        ? "Screen will stay awake"
-                        : "Screen awake setting disabled",
-                Toast.LENGTH_SHORT
-        ).show();
+        showMessage(keepScreenAwake
+                ? "Screen will stay awake"
+                : "Keep screen awake disabled");
     }
 
     private void showFileInfo() {
-        long length = mediaPlayer == null
-                ? 0 : Math.max(0, mediaPlayer.getLength());
-
-        String info =
-                "Name: " + videoName +
-                "\nDuration: " + formatTime(length) +
-                "\nURI: " + videoUri +
-                "\n\nCodec and resolution details are not available yet.";
+        long length = player == null ? 0 : Math.max(0, player.getLength());
 
         new AlertDialog.Builder(this)
                 .setTitle("File information")
-                .setMessage(info)
+                .setMessage(
+                        "Name: " + videoName
+                                + "\nDuration: " + formatTime(length)
+                                + "\nURI: " + videoUri
+                )
                 .setPositiveButton("OK", null)
                 .show();
     }
@@ -853,21 +724,27 @@ public class PlayerActivity extends Activity {
         statusText.setVisibility(visibility);
     }
 
+    private void showNotReady() {
+        showMessage("Wait until playback starts.");
+    }
+
+    private void showMessage(String message) {
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+    }
+
     private String positionKey() {
         return "position_" + videoUri;
     }
 
     private void saveCurrentPosition() {
-        if (mediaPlayer != null && prepared) {
-            savePosition(mediaPlayer.getTime());
+        if (player != null && prepared) {
+            savePosition(player.getTime());
         }
     }
 
     private void savePosition(long position) {
         if (position > 0) {
-            preferences.edit()
-                    .putLong(positionKey(), position)
-                    .apply();
+            preferences.edit().putLong(positionKey(), position).apply();
         }
     }
 
@@ -879,19 +756,14 @@ public class PlayerActivity extends Activity {
 
         if (hours > 0) {
             return String.format(
-                    Locale.getDefault(),
-                    "%d:%02d:%02d",
-                    hours,
-                    minutes,
-                    remaining
+                    Locale.getDefault(), "%d:%02d:%02d",
+                    hours, minutes, remaining
             );
         }
 
         return String.format(
-                Locale.getDefault(),
-                "%02d:%02d",
-                minutes,
-                remaining
+                Locale.getDefault(), "%02d:%02d",
+                minutes, remaining
         );
     }
 
@@ -899,8 +771,8 @@ public class PlayerActivity extends Activity {
     protected void onPause() {
         saveCurrentPosition();
 
-        if (mediaPlayer != null && mediaPlayer.isPlaying()) {
-            mediaPlayer.pause();
+        if (player != null && player.isPlaying()) {
+            player.pause();
         }
 
         super.onPause();
@@ -908,14 +780,15 @@ public class PlayerActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        handler.removeCallbacks(progressUpdater);
+        released = true;
+        handler.removeCallbacks(progressTask);
         saveCurrentPosition();
 
-        if (mediaPlayer != null) {
-            mediaPlayer.stop();
-            mediaPlayer.detachViews();
-            mediaPlayer.release();
-            mediaPlayer = null;
+        if (player != null) {
+            player.stop();
+            player.detachViews();
+            player.release();
+            player = null;
         }
 
         if (libVLC != null) {
