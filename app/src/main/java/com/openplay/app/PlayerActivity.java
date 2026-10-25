@@ -1,8 +1,8 @@
-
 package com.openplay.app;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.graphics.Color;
 import android.net.Uri;
@@ -21,6 +21,7 @@ import android.widget.Toast;
 import org.videolan.libvlc.LibVLC;
 import org.videolan.libvlc.Media;
 import org.videolan.libvlc.MediaPlayer;
+import org.videolan.libvlc.interfaces.ILibVLC;
 import org.videolan.libvlc.util.VLCVideoLayout;
 
 import java.util.ArrayList;
@@ -32,19 +33,17 @@ public class PlayerActivity extends Activity {
     private MediaPlayer mediaPlayer;
     private VLCVideoLayout videoLayout;
 
-    private TextView titleText;
-    private TextView timeText;
-    private TextView statusText;
-    private TextView modeText;
-
-    private SeekBar seekBar;
-    private Button playButton;
-    private Button settingsButton;
-
     private LinearLayout controls;
     private LinearLayout extraControls;
 
-    private android.content.SharedPreferences preferences;
+    private TextView titleText;
+    private TextView timeText;
+    private TextView statusText;
+
+    private SeekBar seekBar;
+    private Button playButton;
+
+    private SharedPreferences preferences;
     private String videoUri;
     private String videoName;
 
@@ -52,14 +51,12 @@ public class PlayerActivity extends Activity {
     private boolean seeking = false;
     private boolean controlsLocked = false;
     private boolean landscape = false;
-    private boolean nightMode = false;
+    private boolean keepScreenAwake = false;
     private boolean muted = false;
-    private int previousVolume = 100;
 
     private int ratioIndex = 0;
     private int displayIndex = 0;
     private int speedIndex = 2;
-    private int rotation = 0;
 
     private final String[] ratios = {
             "Original", "4:3", "16:9", "18:9"
@@ -107,7 +104,8 @@ public class PlayerActivity extends Activity {
 
         if (videoUri == null) {
             Toast.makeText(
-                    this, "Video could not be opened",
+                    this,
+                    "Video could not be opened",
                     Toast.LENGTH_LONG
             ).show();
             finish();
@@ -119,6 +117,7 @@ public class PlayerActivity extends Activity {
 
         createInterface();
         startPlayer();
+        handler.post(progressUpdater);
     }
 
     private void createInterface() {
@@ -139,7 +138,8 @@ public class PlayerActivity extends Activity {
                 videoLayout,
                 new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT,
-                        0, 1
+                        0,
+                        1
                 )
         );
 
@@ -154,7 +154,7 @@ public class PlayerActivity extends Activity {
         timeText.setText("00:00 / 00:00");
         timeText.setTextColor(Color.WHITE);
         timeText.setGravity(Gravity.CENTER);
-        timeText.setPadding(8, 5, 8, 2);
+        timeText.setPadding(8, 4, 8, 0);
         root.addView(timeText);
 
         seekBar = new SeekBar(this);
@@ -165,23 +165,27 @@ public class PlayerActivity extends Activity {
         controls.setGravity(Gravity.CENTER);
         controls.setPadding(4, 2, 4, 2);
 
-        Button back10 = makeButton("-10s");
-        back10.setOnClickListener(v -> seekRelative(-10000));
-        controls.addView(back10);
+        Button backButton = makeButton("-10s");
+        backButton.setOnClickListener(
+                v -> seekRelative(-10000)
+        );
+        controls.addView(backButton);
 
         playButton = makeButton("PLAY");
         playButton.setOnClickListener(v -> togglePlayback());
         controls.addView(playButton);
 
-        Button forward10 = makeButton("+10s");
-        forward10.setOnClickListener(v -> seekRelative(10000));
-        controls.addView(forward10);
+        Button forwardButton = makeButton("+10s");
+        forwardButton.setOnClickListener(
+                v -> seekRelative(10000)
+        );
+        controls.addView(forwardButton);
 
         root.addView(controls);
 
         extraControls = new LinearLayout(this);
         extraControls.setGravity(Gravity.CENTER);
-        extraControls.setPadding(4, 2, 4, 4);
+        extraControls.setPadding(4, 2, 4, 8);
 
         Button rotateButton = makeButton("ROTATE");
         rotateButton.setOnClickListener(v -> rotateScreen());
@@ -192,24 +196,27 @@ public class PlayerActivity extends Activity {
         extraControls.addView(ratioButton);
 
         Button displayButton = makeButton("FIT / ZOOM");
-        displayButton.setOnClickListener(v -> chooseDisplayMode());
+        displayButton.setOnClickListener(
+                v -> chooseDisplayMode()
+        );
         extraControls.addView(displayButton);
 
-        settingsButton = makeButton("SETTINGS");
+        Button audioButton = makeButton("AUDIO");
+        audioButton.setOnClickListener(v -> showAudioTracks());
+        extraControls.addView(audioButton);
+
+        Button subtitlesButton = makeButton("SUBTITLES");
+        subtitlesButton.setOnClickListener(
+                v -> showSubtitleTracks()
+        );
+        extraControls.addView(subtitlesButton);
+
+        Button settingsButton = makeButton("SETTINGS");
         settingsButton.setOnClickListener(v -> showSettings());
         extraControls.addView(settingsButton);
 
         root.addView(extraControls);
-
-        modeText = new TextView(this);
-        modeText.setTextColor(Color.LTGRAY);
-        modeText.setTextSize(12);
-        modeText.setGravity(Gravity.CENTER);
-        modeText.setPadding(4, 4, 4, 8);
-        root.addView(modeText);
-
         setContentView(root);
-        updateModeText();
 
         seekBar.setOnSeekBarChangeListener(
                 new SeekBar.OnSeekBarChangeListener() {
@@ -222,9 +229,12 @@ public class PlayerActivity extends Activity {
                     public void onStopTrackingTouch(SeekBar bar) {
                         if (mediaPlayer != null && prepared) {
                             long length = mediaPlayer.getLength();
+
                             if (length > 0) {
                                 long target =
-                                        length * bar.getProgress() / 1000L;
+                                        length * bar.getProgress()
+                                                / 1000L;
+
                                 mediaPlayer.setTime(target);
                                 savePosition(target);
                             }
@@ -234,7 +244,10 @@ public class PlayerActivity extends Activity {
 
                     @Override
                     public void onProgressChanged(
-                            SeekBar bar, int progress, boolean fromUser) {
+                            SeekBar bar,
+                            int progress,
+                            boolean fromUser
+                    ) {
                     }
                 }
         );
@@ -298,7 +311,7 @@ public class PlayerActivity extends Activity {
                                 playButton.setText("RETRY");
                                 Toast.makeText(
                                         PlayerActivity.this,
-                                        "Playback failed. Try another decoder or file.",
+                                        "Unable to play this video",
                                         Toast.LENGTH_LONG
                                 ).show();
                                 break;
@@ -330,19 +343,20 @@ public class PlayerActivity extends Activity {
                 }, 1500);
             }
 
-            handler.post(progressUpdater);
-
         } catch (Exception e) {
             statusText.setText("Unable to start player");
             Toast.makeText(
-                    this, "Player error: " + e.getMessage(),
+                    this,
+                    "Player error: " + e.getMessage(),
                     Toast.LENGTH_LONG
             ).show();
         }
     }
 
     private void togglePlayback() {
-        if (mediaPlayer == null) return;
+        if (mediaPlayer == null) {
+            return;
+        }
 
         try {
             if (mediaPlayer.isPlaying()) {
@@ -350,26 +364,33 @@ public class PlayerActivity extends Activity {
             } else if (prepared) {
                 mediaPlayer.play();
             } else {
-                statusText.setText("Retrying...");
-                mediaPlayer.play();
+                Toast.makeText(
+                        this,
+                        "Player is not ready. Reopen the video.",
+                        Toast.LENGTH_SHORT
+                ).show();
             }
         } catch (Exception e) {
             Toast.makeText(
-                    this, "Unable to change playback",
+                    this,
+                    "Unable to change playback",
                     Toast.LENGTH_SHORT
             ).show();
         }
     }
 
     private void updateProgress() {
-        if (mediaPlayer == null || !prepared) return;
+        if (mediaPlayer == null || timeText == null) {
+            return;
+        }
 
         long current = Math.max(0, mediaPlayer.getTime());
         long length = Math.max(0, mediaPlayer.getLength());
 
         if (!seeking && length > 0) {
             seekBar.setProgress((int) Math.min(
-                    1000, current * 1000L / length
+                    1000,
+                    current * 1000L / length
             ));
         }
 
@@ -378,7 +399,11 @@ public class PlayerActivity extends Activity {
         );
 
         if (length > 0 && current >= length - 1500) {
-            preferences.edit().remove(positionKey()).apply();
+            preferences.edit()
+                    .remove(positionKey())
+                    .apply();
+        } else if (current > 0) {
+            savePosition(current);
         }
 
         playButton.setText(
@@ -387,34 +412,147 @@ public class PlayerActivity extends Activity {
     }
 
     private void seekRelative(long offset) {
-        if (mediaPlayer == null || !prepared) return;
+        if (mediaPlayer == null || !prepared) {
+            return;
+        }
 
         long current = Math.max(0, mediaPlayer.getTime());
         long length = mediaPlayer.getLength();
         long target = Math.max(0, current + offset);
 
-        if (length > 0) target = Math.min(target, length);
+        if (length > 0) {
+            target = Math.min(target, length);
+        }
 
         mediaPlayer.setTime(target);
         savePosition(target);
         updateProgress();
     }
 
+    private void showAudioTracks() {
+        if (mediaPlayer == null || !prepared) {
+            Toast.makeText(
+                    this,
+                    "Wait until the video starts playing",
+                    Toast.LENGTH_SHORT
+            ).show();
+            return;
+        }
+
+        MediaPlayer.TrackDescription[] tracks =
+                mediaPlayer.getAudioTracks();
+
+        if (tracks == null || tracks.length == 0) {
+            Toast.makeText(
+                    this,
+                    "No audio tracks available",
+                    Toast.LENGTH_SHORT
+            ).show();
+            return;
+        }
+
+        String[] names = new String[tracks.length];
+        int selected = -1;
+
+        for (int i = 0; i < tracks.length; i++) {
+            names[i] = tracks[i].name == null
+                    ? "Audio track " + (i + 1)
+                    : tracks[i].name;
+
+            if (tracks[i].id == mediaPlayer.getAudioTrack()) {
+                selected = i;
+            }
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle("Audio Track")
+                .setSingleChoiceItems(
+                        names,
+                        selected,
+                        (dialog, which) -> {
+                            mediaPlayer.setAudioTrack(tracks[which].id);
+                            dialog.dismiss();
+                        }
+                )
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void showSubtitleTracks() {
+        if (mediaPlayer == null || !prepared) {
+            Toast.makeText(
+                    this,
+                    "Wait until the video starts playing",
+                    Toast.LENGTH_SHORT
+            ).show();
+            return;
+        }
+
+        MediaPlayer.TrackDescription[] tracks =
+                mediaPlayer.getSpuTracks();
+
+        int currentTrack = mediaPlayer.getSpuTrack();
+        int selected = 0;
+
+        String[] names;
+        if (tracks == null || tracks.length == 0) {
+            names = new String[]{"Subtitles Off"};
+        } else {
+            names = new String[tracks.length + 1];
+            names[0] = "Subtitles Off";
+
+            for (int i = 0; i < tracks.length; i++) {
+                names[i + 1] = tracks[i].name == null
+                        ? "Subtitle " + (i + 1)
+                        : tracks[i].name;
+
+                if (tracks[i].id == currentTrack) {
+                    selected = i + 1;
+                }
+            }
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle("Subtitles")
+                .setSingleChoiceItems(
+                        names,
+                        selected,
+                        (dialog, which) -> {
+                            if (which == 0) {
+                                mediaPlayer.setSpuTrack(-1);
+                            } else if (tracks != null
+                                    && which - 1 < tracks.length) {
+                                mediaPlayer.setSpuTrack(
+                                        tracks[which - 1].id
+                                );
+                            }
+                            dialog.dismiss();
+                        }
+                )
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
     private void chooseRatio() {
         new AlertDialog.Builder(this)
                 .setTitle("Aspect ratio")
-                .setSingleChoiceItems(ratios, ratioIndex,
+                .setSingleChoiceItems(
+                        ratios,
+                        ratioIndex,
                         (dialog, which) -> {
                             ratioIndex = which;
                             applyRatio();
                             dialog.dismiss();
-                        })
+                        }
+                )
                 .setNegativeButton("Cancel", null)
                 .show();
     }
 
     private void applyRatio() {
-        if (mediaPlayer == null) return;
+        if (mediaPlayer == null) {
+            return;
+        }
 
         switch (ratios[ratioIndex]) {
             case "4:3":
@@ -431,24 +569,29 @@ public class PlayerActivity extends Activity {
                 break;
         }
 
-        updateModeText();
+        statusText.setText("Ratio: " + ratios[ratioIndex]);
     }
 
     private void chooseDisplayMode() {
         new AlertDialog.Builder(this)
                 .setTitle("Display mode")
-                .setSingleChoiceItems(displayModes, displayIndex,
+                .setSingleChoiceItems(
+                        displayModes,
+                        displayIndex,
                         (dialog, which) -> {
                             displayIndex = which;
                             applyDisplayMode();
                             dialog.dismiss();
-                        })
+                        }
+                )
                 .setNegativeButton("Cancel", null)
                 .show();
     }
 
     private void applyDisplayMode() {
-        if (mediaPlayer == null) return;
+        if (mediaPlayer == null) {
+            return;
+        }
 
         switch (displayModes[displayIndex]) {
             case "Fit":
@@ -468,7 +611,9 @@ public class PlayerActivity extends Activity {
                 break;
         }
 
-        updateModeText();
+        statusText.setText(
+                "Display: " + displayModes[displayIndex]
+        );
     }
 
     private void rotateScreen() {
@@ -489,14 +634,19 @@ public class PlayerActivity extends Activity {
 
         new AlertDialog.Builder(this)
                 .setTitle("Playback speed")
-                .setSingleChoiceItems(labels, speedIndex,
+                .setSingleChoiceItems(
+                        labels,
+                        speedIndex,
                         (dialog, which) -> {
                             speedIndex = which;
+
                             if (mediaPlayer != null) {
                                 mediaPlayer.setRate(speeds[which]);
                             }
+
                             dialog.dismiss();
-                        })
+                        }
+                )
                 .setNegativeButton("Cancel", null)
                 .show();
     }
@@ -509,8 +659,7 @@ public class PlayerActivity extends Activity {
                 "Brightness",
                 "Mute / unmute",
                 "Screen lock",
-                "Night mode",
-                "Cut video (open editor)",
+                "Keep screen awake",
                 "File information"
         };
 
@@ -537,12 +686,9 @@ public class PlayerActivity extends Activity {
                             toggleLock();
                             break;
                         case 6:
-                            toggleNightMode();
+                            toggleKeepScreenAwake();
                             break;
                         case 7:
-                            openVideoEditor();
-                            break;
-                        case 8:
                             showFileInfo();
                             break;
                     }
@@ -554,17 +700,23 @@ public class PlayerActivity extends Activity {
         SeekBar bar = new SeekBar(this);
         bar.setMax(100);
 
-        WindowManager.LayoutParams currentParams =
+        WindowManager.LayoutParams params =
                 getWindow().getAttributes();
 
-        float initial = currentParams.screenBrightness < 0
-                ? 0.5f : currentParams.screenBrightness;
+        float initial = params.screenBrightness < 0
+                ? 0.5f : params.screenBrightness;
 
         bar.setProgress((int) (initial * 100));
 
         LinearLayout layout = new LinearLayout(this);
         layout.setPadding(24, 20, 24, 10);
-        layout.addView(bar);
+        layout.addView(
+                bar,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+        );
 
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Brightness")
@@ -576,12 +728,16 @@ public class PlayerActivity extends Activity {
                 new SeekBar.OnSeekBarChangeListener() {
                     @Override
                     public void onProgressChanged(
-                            SeekBar seekBar, int progress,
-                            boolean fromUser) {
+                            SeekBar seekBar,
+                            int progress,
+                            boolean fromUser
+                    ) {
                         WindowManager.LayoutParams p =
                                 getWindow().getAttributes();
+
                         p.screenBrightness =
                                 Math.max(0.01f, progress / 100f);
+
                         getWindow().setAttributes(p);
                     }
 
@@ -599,21 +755,16 @@ public class PlayerActivity extends Activity {
     }
 
     private void toggleMute() {
-        if (mediaPlayer == null) return;
-
-        if (!muted) {
-            previousVolume = mediaPlayer.getVolume();
-            mediaPlayer.setVolume(0);
-            muted = true;
-        } else {
-            mediaPlayer.setVolume(
-                    previousVolume > 0 ? previousVolume : 100
-            );
-            muted = false;
+        if (mediaPlayer == null) {
+            return;
         }
 
+        muted = !muted;
+        mediaPlayer.setMute(muted);
+
         Toast.makeText(
-                this, muted ? "Muted" : "Sound on",
+                this,
+                muted ? "Muted" : "Sound on",
                 Toast.LENGTH_SHORT
         ).show();
     }
@@ -621,25 +772,29 @@ public class PlayerActivity extends Activity {
     private void toggleLock() {
         controlsLocked = !controlsLocked;
 
-        controls.setVisibility(
-                controlsLocked ? View.GONE : View.VISIBLE
-        );
-        extraControls.setVisibility(
-                controlsLocked ? View.GONE : View.VISIBLE
-        );
-        settingsButton.setEnabled(!controlsLocked);
-
-        Toast.makeText(
-                this,
-                controlsLocked ? "Controls locked" : "Controls unlocked",
-                Toast.LENGTH_SHORT
-        ).show();
+        if (controlsLocked) {
+            controls.setVisibility(View.GONE);
+            extraControls.setVisibility(View.GONE);
+            Toast.makeText(
+                    this,
+                    "Controls locked. Tap video to unlock.",
+                    Toast.LENGTH_SHORT
+            ).show();
+        } else {
+            controls.setVisibility(View.VISIBLE);
+            extraControls.setVisibility(View.VISIBLE);
+            Toast.makeText(
+                    this,
+                    "Controls unlocked",
+                    Toast.LENGTH_SHORT
+            ).show();
+        }
     }
 
-    private void toggleNightMode() {
-        nightMode = !nightMode;
+    private void toggleKeepScreenAwake() {
+        keepScreenAwake = !keepScreenAwake;
 
-        if (nightMode) {
+        if (keepScreenAwake) {
             getWindow().addFlags(
                     WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
             );
@@ -651,36 +806,22 @@ public class PlayerActivity extends Activity {
 
         Toast.makeText(
                 this,
-                nightMode
+                keepScreenAwake
                         ? "Screen will stay awake"
                         : "Screen awake setting disabled",
                 Toast.LENGTH_SHORT
         ).show();
     }
 
-    private void openVideoEditor() {
-        try {
-            Intent intent = new Intent(Intent.ACTION_EDIT);
-            intent.setDataAndType(Uri.parse(videoUri), "video/*");
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            startActivity(Intent.createChooser(
-                    intent, "Open video editor"
-            ));
-        } catch (Exception e) {
-            Toast.makeText(
-                    this, "No compatible video editor installed",
-                    Toast.LENGTH_LONG
-            ).show();
-        }
-    }
-
     private void showFileInfo() {
         long length = mediaPlayer == null
                 ? 0 : Math.max(0, mediaPlayer.getLength());
 
-        String info = "Name: " + videoName
-                + "\nDuration: " + formatTime(length)
-                + "\nURI: " + videoUri;
+        String info =
+                "Name: " + videoName +
+                "\nDuration: " + formatTime(length) +
+                "\nURI: " + videoUri +
+                "\n\nCodec and resolution details are not available yet.";
 
         new AlertDialog.Builder(this)
                 .setTitle("File information")
@@ -690,7 +831,16 @@ public class PlayerActivity extends Activity {
     }
 
     private void toggleControls() {
-        if (controlsLocked) return;
+        if (controlsLocked) {
+            controlsLocked = false;
+            controls.setVisibility(View.VISIBLE);
+            extraControls.setVisibility(View.VISIBLE);
+            timeText.setVisibility(View.VISIBLE);
+            seekBar.setVisibility(View.VISIBLE);
+            titleText.setVisibility(View.VISIBLE);
+            statusText.setVisibility(View.VISIBLE);
+            return;
+        }
 
         int visibility = controls.getVisibility() == View.VISIBLE
                 ? View.GONE : View.VISIBLE;
@@ -701,17 +851,6 @@ public class PlayerActivity extends Activity {
         seekBar.setVisibility(visibility);
         titleText.setVisibility(visibility);
         statusText.setVisibility(visibility);
-        modeText.setVisibility(visibility);
-    }
-
-    private void updateModeText() {
-        if (modeText != null) {
-            modeText.setText(
-                    "Ratio: " + ratios[ratioIndex]
-                    + " | Display: " + displayModes[displayIndex]
-                    + " | Rotation: " + rotation + "°"
-            );
-        }
     }
 
     private String positionKey() {
@@ -742,14 +881,17 @@ public class PlayerActivity extends Activity {
             return String.format(
                     Locale.getDefault(),
                     "%d:%02d:%02d",
-                    hours, minutes, remaining
+                    hours,
+                    minutes,
+                    remaining
             );
         }
 
         return String.format(
                 Locale.getDefault(),
                 "%02d:%02d",
-                minutes, remaining
+                minutes,
+                remaining
         );
     }
 
