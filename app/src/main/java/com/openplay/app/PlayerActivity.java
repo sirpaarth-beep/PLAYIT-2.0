@@ -1,4 +1,3 @@
-
 package com.openplay.app;
 
 import android.app.Activity;
