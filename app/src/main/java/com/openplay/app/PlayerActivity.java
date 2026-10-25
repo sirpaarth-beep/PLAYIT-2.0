@@ -3,15 +3,12 @@ package com.openplay.app;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.Intent;
-import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
@@ -38,12 +35,16 @@ public class PlayerActivity extends Activity {
     private TextView titleText;
     private TextView timeText;
     private TextView statusText;
+    private TextView modeText;
 
     private SeekBar seekBar;
     private Button playButton;
     private Button settingsButton;
 
-    private SharedPreferences preferences;
+    private LinearLayout controls;
+    private LinearLayout extraControls;
+
+    private android.content.SharedPreferences preferences;
     private String videoUri;
     private String videoName;
 
@@ -52,10 +53,13 @@ public class PlayerActivity extends Activity {
     private boolean controlsLocked = false;
     private boolean landscape = false;
     private boolean nightMode = false;
+    private boolean muted = false;
+    private int previousVolume = 100;
 
     private int ratioIndex = 0;
     private int displayIndex = 0;
-    private int speedIndex = 1;
+    private int speedIndex = 2;
+    private int rotation = 0;
 
     private final String[] ratios = {
             "Original", "4:3", "16:9", "18:9"
@@ -68,10 +72,6 @@ public class PlayerActivity extends Activity {
     private final float[] speeds = {
             0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f
     };
-
-    private LinearLayout root;
-    private LinearLayout controls;
-    private LinearLayout extraControls;
 
     private final Handler handler =
             new Handler(Looper.getMainLooper());
@@ -122,7 +122,7 @@ public class PlayerActivity extends Activity {
     }
 
     private void createInterface() {
-        root = new LinearLayout(this);
+        LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.BLACK);
 
@@ -131,7 +131,7 @@ public class PlayerActivity extends Activity {
         titleText.setTextColor(Color.WHITE);
         titleText.setTextSize(15);
         titleText.setMaxLines(2);
-        titleText.setPadding(12, 12, 12, 12);
+        titleText.setPadding(12, 10, 12, 10);
         root.addView(titleText);
 
         videoLayout = new VLCVideoLayout(this);
@@ -181,7 +181,7 @@ public class PlayerActivity extends Activity {
 
         extraControls = new LinearLayout(this);
         extraControls.setGravity(Gravity.CENTER);
-        extraControls.setPadding(4, 2, 4, 8);
+        extraControls.setPadding(4, 2, 4, 4);
 
         Button rotateButton = makeButton("ROTATE");
         rotateButton.setOnClickListener(v -> rotateScreen());
@@ -200,7 +200,16 @@ public class PlayerActivity extends Activity {
         extraControls.addView(settingsButton);
 
         root.addView(extraControls);
+
+        modeText = new TextView(this);
+        modeText.setTextColor(Color.LTGRAY);
+        modeText.setTextSize(12);
+        modeText.setGravity(Gravity.CENTER);
+        modeText.setPadding(4, 4, 4, 8);
+        root.addView(modeText);
+
         setContentView(root);
+        updateModeText();
 
         seekBar.setOnSeekBarChangeListener(
                 new SeekBar.OnSeekBarChangeListener() {
@@ -213,7 +222,6 @@ public class PlayerActivity extends Activity {
                     public void onStopTrackingTouch(SeekBar bar) {
                         if (mediaPlayer != null && prepared) {
                             long length = mediaPlayer.getLength();
-
                             if (length > 0) {
                                 long target =
                                         length * bar.getProgress() / 1000L;
@@ -226,9 +234,7 @@ public class PlayerActivity extends Activity {
 
                     @Override
                     public void onProgressChanged(
-                            SeekBar bar, int progress,
-                            boolean fromUser
-                    ) {
+                            SeekBar bar, int progress, boolean fromUser) {
                     }
                 }
         );
@@ -292,7 +298,7 @@ public class PlayerActivity extends Activity {
                                 playButton.setText("RETRY");
                                 Toast.makeText(
                                         PlayerActivity.this,
-                                        "VLC could not decode this video. Try another decoder or file.",
+                                        "Playback failed. Try another decoder or file.",
                                         Toast.LENGTH_LONG
                                 ).show();
                                 break;
@@ -304,10 +310,6 @@ public class PlayerActivity extends Activity {
                     videoLayout, null, false, false
             );
 
-            long savedPosition = preferences.getLong(
-                    positionKey(), 0L
-            );
-
             Media media = new Media(
                     libVLC, Uri.parse(videoUri)
             );
@@ -316,12 +318,16 @@ public class PlayerActivity extends Activity {
             media.release();
             mediaPlayer.play();
 
+            long savedPosition = preferences.getLong(
+                    positionKey(), 0L
+            );
+
             if (savedPosition > 0) {
                 handler.postDelayed(() -> {
                     if (mediaPlayer != null && prepared) {
                         mediaPlayer.setTime(savedPosition);
                     }
-                }, 1200);
+                }, 1500);
             }
 
             handler.post(progressUpdater);
@@ -329,8 +335,7 @@ public class PlayerActivity extends Activity {
         } catch (Exception e) {
             statusText.setText("Unable to start player");
             Toast.makeText(
-                    this,
-                    "Player error: " + e.getMessage(),
+                    this, "Player error: " + e.getMessage(),
                     Toast.LENGTH_LONG
             ).show();
         }
@@ -345,7 +350,8 @@ public class PlayerActivity extends Activity {
             } else if (prepared) {
                 mediaPlayer.play();
             } else {
-                startPlayer();
+                statusText.setText("Retrying...");
+                mediaPlayer.play();
             }
         } catch (Exception e) {
             Toast.makeText(
@@ -356,7 +362,7 @@ public class PlayerActivity extends Activity {
     }
 
     private void updateProgress() {
-        if (mediaPlayer == null) return;
+        if (mediaPlayer == null || !prepared) return;
 
         long current = Math.max(0, mediaPlayer.getTime());
         long length = Math.max(0, mediaPlayer.getLength());
@@ -375,9 +381,9 @@ public class PlayerActivity extends Activity {
             preferences.edit().remove(positionKey()).apply();
         }
 
-        if (mediaPlayer.isPlaying()) {
-            playButton.setText("PAUSE");
-        }
+        playButton.setText(
+                mediaPlayer.isPlaying() ? "PAUSE" : "PLAY"
+        );
     }
 
     private void seekRelative(long offset) {
@@ -397,14 +403,12 @@ public class PlayerActivity extends Activity {
     private void chooseRatio() {
         new AlertDialog.Builder(this)
                 .setTitle("Aspect ratio")
-                .setSingleChoiceItems(
-                        ratios, ratioIndex,
+                .setSingleChoiceItems(ratios, ratioIndex,
                         (dialog, which) -> {
                             ratioIndex = which;
                             applyRatio();
                             dialog.dismiss();
-                        }
-                )
+                        })
                 .setNegativeButton("Cancel", null)
                 .show();
     }
@@ -427,20 +431,18 @@ public class PlayerActivity extends Activity {
                 break;
         }
 
-        statusText.setText("Ratio: " + ratios[ratioIndex]);
+        updateModeText();
     }
 
     private void chooseDisplayMode() {
         new AlertDialog.Builder(this)
                 .setTitle("Display mode")
-                .setSingleChoiceItems(
-                        displayModes, displayIndex,
+                .setSingleChoiceItems(displayModes, displayIndex,
                         (dialog, which) -> {
                             displayIndex = which;
                             applyDisplayMode();
                             dialog.dismiss();
-                        }
-                )
+                        })
                 .setNegativeButton("Cancel", null)
                 .show();
     }
@@ -466,9 +468,7 @@ public class PlayerActivity extends Activity {
                 break;
         }
 
-        statusText.setText(
-                "Display: " + displayModes[displayIndex]
-        );
+        updateModeText();
     }
 
     private void rotateScreen() {
@@ -489,16 +489,14 @@ public class PlayerActivity extends Activity {
 
         new AlertDialog.Builder(this)
                 .setTitle("Playback speed")
-                .setSingleChoiceItems(
-                        labels, speedIndex,
+                .setSingleChoiceItems(labels, speedIndex,
                         (dialog, which) -> {
                             speedIndex = which;
                             if (mediaPlayer != null) {
                                 mediaPlayer.setRate(speeds[which]);
                             }
                             dialog.dismiss();
-                        }
-                )
+                        })
                 .setNegativeButton("Cancel", null)
                 .show();
     }
@@ -556,23 +554,17 @@ public class PlayerActivity extends Activity {
         SeekBar bar = new SeekBar(this);
         bar.setMax(100);
 
-        WindowManager.LayoutParams params =
+        WindowManager.LayoutParams currentParams =
                 getWindow().getAttributes();
 
-        float initial = params.screenBrightness < 0
-                ? 0.5f : params.screenBrightness;
+        float initial = currentParams.screenBrightness < 0
+                ? 0.5f : currentParams.screenBrightness;
 
         bar.setProgress((int) (initial * 100));
 
         LinearLayout layout = new LinearLayout(this);
         layout.setPadding(24, 20, 24, 10);
-        layout.addView(
-                bar,
-                new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-        );
+        layout.addView(bar);
 
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Brightness")
@@ -585,8 +577,7 @@ public class PlayerActivity extends Activity {
                     @Override
                     public void onProgressChanged(
                             SeekBar seekBar, int progress,
-                            boolean fromUser
-                    ) {
+                            boolean fromUser) {
                         WindowManager.LayoutParams p =
                                 getWindow().getAttributes();
                         p.screenBrightness =
@@ -610,17 +601,26 @@ public class PlayerActivity extends Activity {
     private void toggleMute() {
         if (mediaPlayer == null) return;
 
-        boolean muted = mediaPlayer.isMute();
-        mediaPlayer.setMute(!muted);
+        if (!muted) {
+            previousVolume = mediaPlayer.getVolume();
+            mediaPlayer.setVolume(0);
+            muted = true;
+        } else {
+            mediaPlayer.setVolume(
+                    previousVolume > 0 ? previousVolume : 100
+            );
+            muted = false;
+        }
 
         Toast.makeText(
-                this, !muted ? "Muted" : "Sound on",
+                this, muted ? "Muted" : "Sound on",
                 Toast.LENGTH_SHORT
         ).show();
     }
 
     private void toggleLock() {
         controlsLocked = !controlsLocked;
+
         controls.setVisibility(
                 controlsLocked ? View.GONE : View.VISIBLE
         );
@@ -643,36 +643,32 @@ public class PlayerActivity extends Activity {
             getWindow().addFlags(
                     WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
             );
-            Toast.makeText(
-                    this,
-                    "Night mode enabled (screen stays awake)",
-                    Toast.LENGTH_SHORT
-            ).show();
         } else {
             getWindow().clearFlags(
                     WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
             );
-            Toast.makeText(
-                    this, "Night mode disabled",
-                    Toast.LENGTH_SHORT
-            ).show();
         }
+
+        Toast.makeText(
+                this,
+                nightMode
+                        ? "Screen will stay awake"
+                        : "Screen awake setting disabled",
+                Toast.LENGTH_SHORT
+        ).show();
     }
 
     private void openVideoEditor() {
         try {
             Intent intent = new Intent(Intent.ACTION_EDIT);
-            intent.setDataAndType(
-                    Uri.parse(videoUri), "video/*"
-            );
+            intent.setDataAndType(Uri.parse(videoUri), "video/*");
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             startActivity(Intent.createChooser(
                     intent, "Open video editor"
             ));
         } catch (Exception e) {
             Toast.makeText(
-                    this,
-                    "No compatible video editor is installed",
+                    this, "No compatible video editor installed",
                     Toast.LENGTH_LONG
             ).show();
         }
@@ -682,11 +678,9 @@ public class PlayerActivity extends Activity {
         long length = mediaPlayer == null
                 ? 0 : Math.max(0, mediaPlayer.getLength());
 
-        String info =
-                "Name: " + videoName +
-                "\nDuration: " + formatTime(length) +
-                "\nURI: " + videoUri +
-                "\n\nResolution and codec information are not available yet.";
+        String info = "Name: " + videoName
+                + "\nDuration: " + formatTime(length)
+                + "\nURI: " + videoUri;
 
         new AlertDialog.Builder(this)
                 .setTitle("File information")
@@ -707,6 +701,17 @@ public class PlayerActivity extends Activity {
         seekBar.setVisibility(visibility);
         titleText.setVisibility(visibility);
         statusText.setVisibility(visibility);
+        modeText.setVisibility(visibility);
+    }
+
+    private void updateModeText() {
+        if (modeText != null) {
+            modeText.setText(
+                    "Ratio: " + ratios[ratioIndex]
+                    + " | Display: " + displayModes[displayIndex]
+                    + " | Rotation: " + rotation + "°"
+            );
+        }
     }
 
     private String positionKey() {
