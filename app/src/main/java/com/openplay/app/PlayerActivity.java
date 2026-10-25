@@ -10,6 +10,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
@@ -28,6 +29,8 @@ import java.util.ArrayList;
 import java.util.Locale;
 
 public class PlayerActivity extends Activity {
+
+    private static final String TAG = "OpenPlayVLC";
 
     private LibVLC libVLC;
     private MediaPlayer player;
@@ -270,6 +273,11 @@ public class PlayerActivity extends Activity {
 
             ArrayList<String> options = new ArrayList<>();
             options.add("--no-video-title-show");
+            options.add("--avcodec-hw=none");
+            options.add("--verbose=2");
+
+            Log.i(TAG, "Starting VLC with hardware decoding disabled");
+            Log.i(TAG, "Video URI: " + videoUri);
 
             libVLC = new LibVLC(this, options);
             player = new MediaPlayer(libVLC);
@@ -280,9 +288,12 @@ public class PlayerActivity extends Activity {
                             return;
                         }
 
+                        Log.d(TAG, "VLC event: " + event.type);
+
                         switch (event.type) {
                             case MediaPlayer.Event.Opening:
                                 statusText.setText("Opening video...");
+                                Log.i(TAG, "Opening video");
                                 break;
 
                             case MediaPlayer.Event.Buffering:
@@ -293,6 +304,7 @@ public class PlayerActivity extends Activity {
                                 prepared = true;
                                 playButton.setText("PAUSE");
                                 statusText.setText("Playing");
+                                Log.i(TAG, "Playback started");
                                 updateProgress();
                                 break;
 
@@ -304,12 +316,19 @@ public class PlayerActivity extends Activity {
 
                             case MediaPlayer.Event.Stopped:
                                 playButton.setText("PLAY");
+                                Log.i(TAG, "Playback stopped");
                                 break;
 
                             case MediaPlayer.Event.EncounteredError:
                                 prepared = false;
                                 playButton.setText("RETRY");
                                 statusText.setText("VLC playback error");
+
+                                Log.e(
+                                        TAG,
+                                        "Playback failed for URI: " + videoUri
+                                );
+
                                 Toast.makeText(
                                         PlayerActivity.this,
                                         "Playback failed. Check file access and VLC logs.",
@@ -346,6 +365,9 @@ public class PlayerActivity extends Activity {
 
         } catch (Exception e) {
             prepared = false;
+
+            Log.e(TAG, "Unable to start playback", e);
+
             statusText.setText("Unable to start playback");
             Toast.makeText(
                     this,
@@ -373,11 +395,12 @@ public class PlayerActivity extends Activity {
             } else {
                 Toast.makeText(
                         this,
-                        "Video is not ready. Reopen or retry.",
+                        "Video is not ready. Reopen the video.",
                         Toast.LENGTH_SHORT
                 ).show();
             }
         } catch (Exception e) {
+            Log.e(TAG, "Playback control failed", e);
             Toast.makeText(
                     this, "Playback control failed",
                     Toast.LENGTH_SHORT
@@ -626,7 +649,13 @@ public class PlayerActivity extends Activity {
 
         LinearLayout layout = new LinearLayout(this);
         layout.setPadding(24, 20, 24, 10);
-        layout.addView(bar);
+        layout.addView(
+                bar,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+        );
 
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Brightness")
