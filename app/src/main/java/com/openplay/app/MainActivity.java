@@ -1,3 +1,4 @@
+
 package com.openplay.app;
 
 import android.Manifest;
@@ -11,8 +12,8 @@ import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
 import android.graphics.Color;
+import android.util.Log;
 import android.view.Gravity;
-import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -20,10 +21,13 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.ArrayList;
+import java.util.Locale;
 
 public class MainActivity extends Activity {
 
+    private static final String TAG = "OpenPlayMain";
     private static final int MEDIA_PERMISSION_REQUEST = 100;
+
     private LinearLayout videoList;
     private TextView statusText;
 
@@ -149,6 +153,7 @@ public class MainActivity extends Activity {
     private void loadVideos() {
         videos.clear();
         videoList.removeAllViews();
+        statusText.setText("Scanning videos...");
 
         String[] projection = {
                 MediaStore.Video.Media._ID,
@@ -188,11 +193,8 @@ public class MainActivity extends Activity {
                 }
             }
         } catch (Exception e) {
-            Toast.makeText(
-                    this,
-                    "Unable to load videos",
-                    Toast.LENGTH_LONG
-            ).show();
+            Log.e(TAG, "Failed to scan MediaStore videos", e);
+            statusText.setText("Unable to load videos: " + e.getMessage());
             return;
         }
 
@@ -254,26 +256,44 @@ public class MainActivity extends Activity {
 
         if (hours > 0) {
             return String.format(
-                    java.util.Locale.getDefault(),
+                    Locale.getDefault(),
                     "%d:%02d:%02d",
                     hours, minutes, seconds
             );
         }
 
         return String.format(
-                java.util.Locale.getDefault(),
+                Locale.getDefault(),
                 "%d:%02d",
                 minutes, seconds
         );
     }
 
     private void openVideo(VideoItem item) {
-        Intent intent = new Intent(this, PlayerActivity.class);
-        intent.setData(item.uri);
-        intent.putExtra("video_uri", item.uri.toString());
-        intent.putExtra("video_name", item.name);
-        intent.putExtra("video_id", item.id);
-        startActivity(intent);
+        try {
+            Uri uri = item.uri;
+
+            Log.i(TAG, "Opening video: " + item.name);
+            Log.i(TAG, "Video URI: " + uri);
+
+            Intent intent = new Intent(this, PlayerActivity.class);
+            intent.setAction(Intent.ACTION_VIEW);
+            intent.setData(uri);
+            intent.putExtra("video_uri", uri.toString());
+            intent.putExtra("video_name", item.name);
+            intent.putExtra("video_id", item.id);
+
+            startActivity(intent);
+
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to launch player for " + item.name, e);
+
+            Toast.makeText(
+                    this,
+                    "Unable to open video: " + e.getMessage(),
+                    Toast.LENGTH_LONG
+            ).show();
+        }
     }
 
     @Override
