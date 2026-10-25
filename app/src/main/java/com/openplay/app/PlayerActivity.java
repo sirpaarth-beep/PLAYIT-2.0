@@ -2,20 +2,18 @@ package com.openplay.app;
 
 import android.app.Activity;
 import android.content.SharedPreferences;
-import android.content.pm.ActivityInfo;
-import android.content.res.Configuration;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import android.view.Gravity;
-import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
-import android.util.Log;
 
 import org.videolan.libvlc.LibVLC;
 import org.videolan.libvlc.Media;
@@ -31,8 +29,8 @@ private LibVLC libVLC;
 private MediaPlayer mediaPlayer;
 private VLCVideoLayout videoLayout;
 private TextView timeText;
-private Button playButton;
 private TextView modeText;
+private Button playButton;
 private SeekBar seekBar;
 private SharedPreferences preferences;
 
@@ -44,9 +42,9 @@ private boolean seeking = false;
 private boolean restoring = true;
 private long savedPosition = 0;
 
+private int rotation = 0;
 private int aspectIndex = 0;
 private int displayIndex = 0;
-private int rotation = 0;
 
 private final String[] aspects = {
         "Original", "4:3", "16:9", "18:9"
@@ -157,7 +155,6 @@ private void createInterface() {
 
     LinearLayout controls = new LinearLayout(this);
     controls.setGravity(Gravity.CENTER);
-    controls.setOrientation(LinearLayout.HORIZONTAL);
 
     Button back = new Button(this);
     back.setText("-10s");
@@ -178,17 +175,16 @@ private void createInterface() {
 
     LinearLayout options = new LinearLayout(this);
     options.setGravity(Gravity.CENTER);
-    options.setOrientation(LinearLayout.HORIZONTAL);
 
     Button rotate = new Button(this);
     rotate.setText("Rotate");
     rotate.setOnClickListener(v -> rotateVideo());
     options.addView(rotate);
 
-    Button aspect = new Button(this);
-    aspect.setText("Ratio");
-    aspect.setOnClickListener(v -> changeAspect());
-    options.addView(aspect);
+    Button ratio = new Button(this);
+    ratio.setText("Ratio");
+    ratio.setOnClickListener(v -> changeAspect());
+    options.addView(ratio);
 
     Button display = new Button(this);
     display.setText("Fit / Zoom");
@@ -201,7 +197,6 @@ private void createInterface() {
     modeText.setText("Ratio: Original | Display: Fit | Rotation: 0°");
     modeText.setTextColor(Color.LTGRAY);
     modeText.setGravity(Gravity.CENTER);
-    modeText.setPadding(4, 4, 4, 8);
     root.addView(modeText);
 
     setContentView(root);
@@ -222,10 +217,7 @@ private void startPlayer() {
 
         savedPosition = preferences.getLong(positionKey(), 0L);
 
-        Media media = new Media(
-                libVLC,
-                android.net.Uri.parse(videoUri));
-
+        Media media = new Media(libVLC, Uri.parse(videoUri));
         mediaPlayer.setMedia(media);
         media.release();
 
@@ -252,7 +244,6 @@ private void handleEvent(MediaPlayer.Event event) {
                     mediaPlayer.setTime(savedPosition);
                 }
             }
-
             updateProgress();
             break;
 
@@ -269,8 +260,7 @@ private void handleEvent(MediaPlayer.Event event) {
         case MediaPlayer.Event.EncounteredError:
             prepared = false;
             playButton.setText("Retry");
-            Log.e("OpenPlay",
-                    "VLC playback error: " + videoUri);
+            Log.e("OpenPlay", "VLC playback error: " + videoUri);
             Toast.makeText(this,
                     "Playback failed. Check file or codec compatibility.",
                     Toast.LENGTH_LONG).show();
@@ -346,13 +336,7 @@ private void rotateVideo() {
 
     if (mediaPlayer != null) {
         mediaPlayer.setVideoRotation(
-                rotation == 0
-                        ? MediaPlayer.Rotation.Rotation_0
-                        : rotation == 90
-                        ? MediaPlayer.Rotation.Rotation_90
-                        : rotation == 180
-                        ? MediaPlayer.Rotation.Rotation_180
-                        : MediaPlayer.Rotation.Rotation_270);
+                MediaPlayer.Rotation.values()[rotation / 90]);
     }
 
     updateModeText();
@@ -388,6 +372,7 @@ private void changeDisplayMode() {
         switch (displayModes[displayIndex]) {
             case "Fit":
                 mediaPlayer.setScale(0f);
+                mediaPlayer.setAspectRatio(null);
                 break;
             case "Fill":
                 mediaPlayer.setScale(0f);
@@ -459,7 +444,6 @@ protected void onPause() {
 @Override
 protected void onDestroy() {
     handler.removeCallbacks(updater);
-
     saveCurrentPosition();
 
     if (mediaPlayer != null) {
