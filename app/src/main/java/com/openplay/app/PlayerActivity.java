@@ -760,7 +760,7 @@ public class PlayerActivity extends Activity {
         }
 
         muted = !muted;
-        mediaPlayer.setMute(muted);
+        mediaPlayer.setVolume(muted ? 0 : 100);
 
         Toast.makeText(
                 this,
